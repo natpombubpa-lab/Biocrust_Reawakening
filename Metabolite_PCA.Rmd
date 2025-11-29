@@ -1,0 +1,83 @@
+
+Title: PCA analysis
+Author: Teeratat Kaewjon
+Updated: 8/31/2025
+---
+output:
+  word_document: default
+  html_document: default
+---
+```{r warning=FALSE, message=FALSE}
+library(ape)
+library(vegan)
+library(plyr)
+library(dplyr)
+library(scales)
+library(grid)
+library(reshape2)
+library(phyloseq)
+library(magrittr)
+library(ggplot2)
+library(ggpubr)
+library(data.table)
+library(tidyr)
+library(tidyverse)
+library(multcompView)
+library(car)
+library(microViz)
+library(ComplexHeatmap)
+library(circlize)
+```
+
+### PCA Analysis (55 samples)  by using microviz package 
+In PCA, the distance between points on the plot doesn't have a direct interpretation, as PCA is not based on distance metrics. The positions of points on the plot are determined by their scores along the principal components, and the distances between points reflect their dissimilarity in the multivariate space.
+
+
+```{r}
+met.matrix <- read.table("Metabolite_matrix_fix.txt",header=T,sep="\t",row.names=1, check.names = FALSE)
+metmat <- as(as.matrix(met.matrix), "matrix")
+MET = otu_table(metmat, taxa_are_rows = TRUE)
+```
+
+```{r}
+taxmet <- read.table("Metabolite_information.txt", header=T,sep="\t",row.names=1)
+taxmet <- as(as.matrix(taxmet),"matrix")
+TAX.met = tax_table(taxmet)
+```
+
+```{r}
+meta.met = read.table("Metabolomics_metadata.txt",header=TRUE,row.names=1,sep="\t",stringsAsFactors=FALSE)
+sampleData.met <- sample_data(meta.met)
+```
+
+```{r}
+physeq.met = phyloseq(MET,TAX.met,sampleData.met)
+physeq.met
+```
+
+```{r}
+physeq.met.wo <- subset_samples(physeq.met, Sample_type != "Water")
+physeq.met.wo
+physeq.met.wo_crl <- microbiome::transform(physeq.met.wo, "clr")
+```
+
+###PCA plot w/o water 
+```{r}
+custom_palette <- c("0.05" = "#F8766D" , "1"="#A3A500", "24"="#00BF7D", "48"= "#00B0F6","96"= "#E76BF3")
+
+# Set the factor levels for the "Samples" variable
+sample_data(physeq.met.wo_crl)$Incubation_time <- factor(sample_data(physeq.met.wo_crl)$Incubation_time, levels = c("0.05", "1", "24", "48", "96"))
+```
+
+### Save file
+```{r}
+tiff("D:/Biocrust_Reawakening/Github/Metabolite/Figures/Metabolite_PCA.wo_water.tiff", units="in", width = 8, height = 6, res = 600 )
+
+#pdf("D:/Biocrust_Reawakening/Github/Metabolite/Figures/Metabolite_PCA.wo_water.pdf",width = 8, height = 6)
+
+# Create the PCA plot
+physeq.met.wo_crl %>%
+  ord_calc(method = "auto") %>%
+  ord_plot(color = "Incubation_time", shape = "Sample_type", size = 3.5) +
+  scale_colour_manual(values = custom_palette)
+```

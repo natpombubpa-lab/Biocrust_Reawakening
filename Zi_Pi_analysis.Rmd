@@ -1,0 +1,282 @@
+Title: "SPIEC-EASI for microbial network inference: Export correlation and Zi-Pi calculation"
+Author: Teeratat Kaewjon
+Date: 10 JUNE 2025
+1. Export network igraph via Rcy3 package to visualize network in Cytoscape software.
+2. Pi-Zi calculation and visualization.
+
+---------------------------------------------------------------------------------------------------------------
+```{r}
+setwd("D:/Biocrust_Reawakening/Github/Network/Data")
+```
+
+### Load igraph object
+
+```{r}
+load("D:/Biocrust_Reawakening/Github/Network/Results/ig.LAC1_13_500taxa_corr_new.rda")
+```
+
+
+```{r message=FALSE, warning= FALSE}
+library(SpiecEasi)
+library(igraph)
+library(RCy3)
+library(ggplot2)
+library(devtools)
+library(dplyr)
+```
+
+```{r}
+print(ig.LAC1_500taxa_corr_new)
+```
+
+### Fitering inter-species associations
+
+```{r}
+# Extract edge list with attributes
+edges_df <- get.data.frame(ig.LAC381_500taxa_corr_new, what = "edges")
+
+# Extract node metadata (optional, for later use)
+nodes_df <- get.data.frame(ig.LAC381_500taxa_corr_new, what = "vertices")
+
+# Function to classify nodes based on case sensitivity
+classify_node <- function(node) {
+  if (grepl("^ASV", node)) {
+    return("ITS_ASV")
+  } else if (grepl("^asv", node)) {
+    return("16S_ASV")
+  } else {
+    return("Metabolite")  # Assume anything else is a metabolite
+  }
+}
+
+# Apply classification to both source and target nodes
+edges_df <- edges_df %>%
+  mutate(Category_Source = sapply(from, classify_node),
+         Category_Target = sapply(to, classify_node))
+
+# Filter edges: Remove intra-group links (ITS-ITS, 16S-16S, Metabolite-Metabolite)
+filtered_edges <- edges_df %>%
+  filter(Category_Source != Category_Target)  # Keeps only metabolite-ASV links
+```
+
+```{r}
+# Create a new igraph object with edge attributes preserved
+ig.LAC1_500taxa_corr_filtered <- graph_from_data_frame(filtered_edges, directed = FALSE, vertices = nodes_df)
+```
+
+```{r}
+# Print the new igraph summary
+print(ig.CLC381_500taxa_corr_new_filtered)
+```
+
+```{r}
+# remove isolated nodes after graph creation
+ig.CLC381_500taxa_corr_new_filtered <- induced_subgraph(ig.CLC381_500taxa_corr_new_filtered, vids = V(ig.CLC381_500taxa_corr_new_filtered)[igraph::degree(ig.CLC381_500taxa_corr_new_filtered) > 0])
+```
+
+```{r}
+print(ig.CLC381_500taxa_corr_new_filtered)
+```
+
+```{r}
+save(ig.CLC381_500taxa_corr_new_filtered, file = "D:/Biocrust_Reawakening/New_data/Network/GL_Results/ig.CLC381_500taxa_corr_new_filtered.rda")
+```
+
+### Count intra- and inter-species associations
+
+```{r}
+library(dplyr)
+
+# 1. Bacteria–Bacteria connectivity (16S_ASV–16S_ASV)
+bacteria_bacteria <- edges_df %>%
+  filter(Category_Source == "16S_ASV" & Category_Target == "16S_ASV")
+bacteria_bacteria_count <- nrow(bacteria_bacteria)
+
+# 2. Fungi–Fungi connectivity (ITS_ASV–ITS_ASV)
+fungi_fungi <- edges_df %>%
+  filter(Category_Source == "ITS_ASV" & Category_Target == "ITS_ASV")
+fungi_fungi_count <- nrow(fungi_fungi)
+
+# 3. Fungi–Bacteria connectivity (ITS_ASV–16S_ASV or 16S_ASV–ITS_ASV)
+fungi_bacteria <- edges_df %>%
+  filter((Category_Source == "ITS_ASV" & Category_Target == "16S_ASV") |
+         (Category_Source == "16S_ASV" & Category_Target == "ITS_ASV"))
+fungi_bacteria_count <- nrow(fungi_bacteria)
+
+# 4. Fungi–Metabolite connectivity (ITS_ASV–Metabolite or Metabolite–ITS_ASV)
+fungi_metabolite <- edges_df %>%
+  filter((Category_Source == "ITS_ASV" & Category_Target == "Metabolite") |
+         (Category_Source == "Metabolite" & Category_Target == "ITS_ASV"))
+fungi_metabolite_count <- nrow(fungi_metabolite)
+
+# 5. Bacteria–Metabolite connectivity (16S_ASV–Metabolite or Metabolite–16S_ASV)
+bacteria_metabolite <- edges_df %>%
+  filter((Category_Source == "16S_ASV" & Category_Target == "Metabolite") |
+         (Category_Source == "Metabolite" & Category_Target == "16S_ASV"))
+bacteria_metabolite_count <- nrow(bacteria_metabolite)
+
+# Print all counts
+cat("Bacteria-Bacteria:", bacteria_bacteria_count, "\n")
+cat("Fungi-Fungi:", fungi_fungi_count, "\n")
+cat("Fungi-Bacteria:", fungi_bacteria_count, "\n")
+cat("Fungi-Metabolite:", fungi_metabolite_count, "\n")
+cat("Bacteria-Metabolite:", bacteria_metabolite_count, "\n")
+
+
+```
+
+```{r}
+library(dplyr)
+
+# Function to count total, positive, and negative edges by correlation label
+count_links <- function(df, source_type, target_type) {
+  df_filtered <- df %>%
+    filter(
+      (Category_Source == source_type & Category_Target == target_type) |
+      (Category_Source == target_type & Category_Target == source_type)
+    )
+  
+  tibble(
+    Category = paste(source_type, "-", target_type),
+    Total = nrow(df_filtered),
+    Positive = sum(df_filtered$correlation == "positive", na.rm = TRUE),
+    Negative = sum(df_filtered$correlation == "negative", na.rm = TRUE)
+  )
+}
+
+# Apply the function to each category pair
+bb <- count_links(edges_df, "16S_ASV", "16S_ASV")        # Bacteria-Bacteria
+ff <- count_links(edges_df, "ITS_ASV", "ITS_ASV")        # Fungi-Fungi
+fb <- count_links(edges_df, "ITS_ASV", "16S_ASV")        # Fungi-Bacteria
+fm <- count_links(edges_df, "ITS_ASV", "Metabolite")     # Fungi-Metabolite
+bm <- count_links(edges_df, "16S_ASV", "Metabolite")     # Bacteria-Metabolite
+
+# Combine into one summary table
+connectivity_summary <- bind_rows(bb, ff, fb, fm, bm)
+
+# Print the summary
+print(connectivity_summary)
+
+```
+
+### Export igraph to Cytoscape to visualize network
+```{r}
+library(RCy3)
+
+# Open Cytoscpae software first
+
+cytoscapePing() #  Connect to software
+
+
+# Replace with your object
+createNetworkFromIgraph(ig.CLC381_500taxa_corr_new_filtered, new.title='ig.CLC381_500taxa_corr_new_filtered')
+```
+
+
+### Zi-Pi calculation
+The nodes in the networks were divided into four topological roles based on Zi and Pi values: network hubs (highly connected nodes within entire network, Zi ≥ 2.5, Pi ≥ 0.62), module hubs (highly connected nodes within modules, Zi ≥ 2.5, Pi < 0.62), connectors (nodes that connect modules, Zi < 2.5, Pi ≥ 0.62), and peripherals (nodes connected in modules with few outside connections, Zi < 2.5, Pi < 0.62) https://doi.org/10.3390/microorganisms10030639
+R script ( https://doi.org/10.3390/microorganisms10030639)
+
+```{r}
+seqdeg=igraph::degree(ig.CLC381_500taxa_corr_new) # ig = igraph object
+Nnodes=length(seqdeg)
+Z=seqdeg
+Z[]=0
+P=Z
+Wtc=cluster_fast_greedy(ig.CLC381_500taxa_corr_new) # Module separation and modularity calculation were conducted by                                                  greedy optimization of modularity
+Membership=membership(Wtc)
+Seq=seq(1:Nnodes)
+for(i in 1:Nnodes){
+    L=Membership==Membership[i]         
+    neighbs=neighbors(ig.CLC381_500taxa_corr_new,i)               
+	Kis=sum(L[neighbs])
+	SUM=0
+	SUMsq=0	
+	SUMP=0
+    Miv=Seq[L]
+	for(j in 1:sum(L)){
+		neighbsj=neighbors(ig.CLC381_500taxa_corr_new,Miv[j])
+		Kjs=sum(L[neighbsj])
+	    SUM=SUM+Kjs
+		SUMsq=SUMsq+Kjs^2
+	}
+    Z[i]=(Kis-SUM/sum(L))/sqrt(SUMsq/sum(L)-(SUM/sum(L))^2)
+	if(Kis-SUM/sum(L)==0){Z[i]=0}
+	for(k in 1:max(Membership)){
+	Lp=Membership==k
+	Kisp=sum(Lp[neighbs])
+	SUMP=SUMP+(Kisp/seqdeg[i])^2}
+	P[i]=1-SUMP
+	}
+attribute_node=cbind(degree=seqdeg,module=Membership,Zi=Z, Pi=P)
+```
+
+```{r}
+write.csv(attribute_node, file = "D:/Biocrust_Reawakening/New_data/Network/GL_Results/ZiPi_ig.CLCC3_81.csv",quote=F)
+```
+
+# Adding shape by manual
+```{r}
+attribute_node_fix <- attribute_node
+```
+
+```{r}
+attribute_node_fix <- read.table("D:/Biocrust_Reawakening/New_data/Network/GL_Results/ZiPi_ig.CLCC3_81_filtered.csv",header=T,sep=",",row.names=1, check.names = FALSE)
+```
+
+```{r}
+# Convert to dataframe if attribute_node is not a dataframe (check with class(obj.))
+if (!is.data.frame(attribute_node_fix)) {
+  attribute_node_fix <- as.data.frame(attribute_node_fix)
+}
+```
+
+```{r}
+###plot
+# Convert Pi and Zi columns to numeric
+attribute_node_fix$Pi <- as.numeric(as.character(attribute_node_fix$Pi))
+attribute_node_fix$Zi <- as.numeric(as.character(attribute_node_fix$Zi))
+
+# Calculate the limits for the axes
+x_limits <- c(0.0, 0.8)
+y_limits <- c(-0.3, 3.2)
+
+# Define your own sequence for breaks
+x_breaks <- seq(0, 1, by = 0.2)  # Example sequence for x-axis breaks
+y_breaks <- seq(-2, 3.2, by = 1)    # Example sequence for y-axis breaks
+```
+
+```{r}
+tiff("D:/Biocrust_Reawakening/New_data/Network/GL_Results/20250519_Zi_Pi_CLC3_81.tiff", units="in", width = 7.5, height = 5, res = 600)
+
+keystone <- ggplot(attribute_node_fix, aes(x = Pi, y = Zi, shape = Shape,
+                        color = ifelse(Zi >= 2.5 & Pi >= 0.62, "Network hubs",
+                          ifelse(Zi >= 2.5 & Pi < 0.62, "Module hubs",
+                            ifelse(Zi < 2.5 & Pi >= 0.62, "Connectors", "Peripherals"))))) +
+  geom_point(size = 2) +
+  labs(x = "Among-module connectivity (Pi)", y = "Within-module connectivity (Zi)", title = "Topological keystone in LAC at Cluster 3") +
+  theme(plot.title = element_text(hjust = 0.5)) + # Center the title
+  coord_cartesian(xlim = c(0, 0.8), ylim = c(-3, 3.2)) +
+  scale_x_continuous(breaks = x_breaks) +  # Specify x-axis breaks
+  scale_y_continuous(breaks = y_breaks) +    # Specify y-axis breaks 
+  
+  theme(plot.title = element_text(hjust = 0.5),panel.background = element_rect(fill = "white", colour = "grey50"),
+     legend.position = c(.98, .23),
+     legend.justification = c("right", "top"),
+     legend.box.just = "right",
+     legend.margin = margin(6, 6, 6, 6),
+     legend.title = element_text(size = 10),
+     legend.key.size = unit(0.4, "cm") ) +  # Center the title 
+  geom_vline(xintercept = 0.62, linetype = "dashed") +  # Vertical line at Pi = 0.62
+  geom_hline(yintercept = 2.5, linetype = "dashed") +   # Horizontal line at Zi = 2.5
+  annotate("text", x = 0.74, y = 3.0, label = "No \n Network hubs", colour = "blue", size = 3.5, fontface = "bold") +
+  annotate("text", x = 0.5, y = 3.0, label = "No \n Module hubs", colour = "darkgreen", size = 3.5, fontface = "bold") +
+  annotate("text", x = 0.74, y = 1.9, label = "No \n Connectors", colour = "red", size = 3.5, fontface = "bold") +
+  annotate("text", x = 0.1, y = -2.3, label = "Peripherals", colour = "black", size = 3.5, fontface = "bold") +
+  scale_color_manual(values = c("Network hubs" = "blue", 
+                                 "Module hubs" = "darkgreen",
+                                 "Connectors" = "red",
+                                 "Peripherals" = "black")) +
+  guides(color = "none")
+print(keystone)
+```
