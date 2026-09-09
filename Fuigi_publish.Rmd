@@ -1,0 +1,619 @@
+#Taxonomy composition in Genus level
+
+```{r warning=FALSE, message=FALSE}
+library(ape)
+library(vegan)
+library(plyr)
+library(dplyr)
+library(scales)
+library(grid)
+library(reshape2)
+library(phyloseq)
+library(magrittr)
+library(ggplot2)
+library(ggpubr)
+library(data.table)
+library(tidyr)
+library(tidyverse)
+library(multcompView)
+library(car)
+```
+
+```{r}
+otus <- read.table("./Fungi/Data/CrustTemp2ITSasvUN3.otu_table_fix.txt",header=T,sep="\t",row.names=1)
+otumat <- as(as.matrix(otus), "matrix")
+OTU <- otu_table(otumat, taxa_are_rows = TRUE)
+```
+
+```{r}
+taxmat.fix <- read.table("./Fungi/Data/tax_fun_fix.txt", header=T, sep="\t" ,row.names=1)
+taxmat.fix <- as(as.matrix(taxmat.fix),"matrix")
+TAX.fix <- tax_table(taxmat.fix)
+```
+
+```{r}
+meta <- read.table("./Fungi/Data/CrustTemp2ITSasvUN3.mapping_file_fix.txt",header=TRUE,row.names=1,sep="\t",stringsAsFactors=FALSE)
+sampleData <- sample_data(meta)
+```
+
+```{r}
+physeqITS <- phyloseq(OTU,TAX.fix,sampleData)
+physeqITS
+#tax_table(physeqITS)
+```
+
+```{r}
+physeqITS <- subset_taxa(physeqITS, Kingdom == "Fungi")
+physeqITS
+
+physeq.prune = prune_taxa(taxa_sums(physeqITS) > 1, physeqITS)
+physeq.prune
+```
+
+### Rarefraction curve
+
+Check read counts: any samples that have very low reads should be removed.
+[Ref](http://evomics.org/wp-content/uploads/2016/01/phyloseq-Lab-01-Answers.html)
+
+```{r}
+readcount = data.table(as(sample_data(physeq.prune), "data.frame"),
+                 TotalReads = sample_sums(physeq.prune), 
+                 keep.rownames = TRUE)
+setnames(readcount, "rn", "SampleID")
+
+#For plotting, use command below.
+SeqDepth = ggplot(readcount, aes(TotalReads)) + geom_histogram() + ggtitle("Sequencing Depth")
+```
+
+TotalReads of all the samples can be in this table (select only SampleID and TotalReads columns).
+In order to check samples with low number of reads, "order()" can be used to sort "TotalReads" column.
+In this dataset, N55.Rhizo has very low number of reads, so will will filter this sample out using the next minimum number of reads.
+```{r}
+readcount = readcount[order(readcount$TotalReads), c("SampleID", "TotalReads")]
+```
+
+```{r}
+as.data.frame(readcount)
+```
+
+Extract OTU table, transpose and convert to data frame
+Extract OTU table from phyloseq object as data frame and use vegan to calculate rarefaction curve
+```{r}
+otu.rare <- otu_table(physeq.prune)
+otu.rare <- as.data.frame(t(otu.rare))
+sample_names <- rownames(otu.rare)
+
+#vegan rarecurve 
+png("D:/Biocrust_Reawakening/Github/Fungi(ITS)/Figures/Rarefraction.png", units="in", width = 8.5, height = 6, res = 600 )
+otu.rarecurve <- rarecurve(otu.rare, step = 100, sample = 1000, label = T)
+dev.off()
+```
+```{r}
+otu.rare <- otu_table(physeq.prune)
+otu.rare <- as.data.frame(t(otu.rare))
+sample_names <- rownames(otu.rare)
+
+#vegan rarecurve 
+png("D:/Biocrust_Reawakening/Github/Fungi(ITS)/Figures/Rarefraction.png", units="in", width = 9.5, height = 7, res = 600 )
+otu.rarecurve <- rarecurve(otu.rare, step = 100, sample = 50000, label = T)
+dev.off()
+```
+
+### Taxonomic composition
+
+```{r}
+physeq.LAC <- subset_samples(physeq.prune, Crusttype=="LAC")
+physeq.LAC
+
+physeq.CLC <- subset_samples(physeq.prune, Crusttype=="CLC")
+physeq.CLC
+```
+
+```{r}
+glom.bac.LAC <- speedyseq::tax_glom(physeq.LAC,taxrank = "Genus")
+#glom.bac
+#tax_table(glom.bac)
+
+glom.bac.CLC <- speedyseq::tax_glom(physeq.CLC,taxrank = "Genus")
+#tax_table(glom.bac)
+```
+
+```{r}
+bac.abund.LAC <- merge_samples(glom.bac.LAC, "Incubation")
+sample_data(bac.abund.LAC)$Incubation <- factor(sample_names(bac.abund.LAC))
+bac.abund.LAC = transform_sample_counts(bac.abund.LAC, function(x) x / sum(x))
+bac.abund.LAC
+
+bac.abund.CLC <- merge_samples(glom.bac.CLC, "Incubation")
+sample_data(bac.abund.CLC)$Incubation <- factor(sample_names(bac.abund.CLC))
+bac.abund.CLC = transform_sample_counts(bac.abund.CLC, function(x) x / sum(x))
+bac.abund.CLC
+```
+
+```{r}
+data_glom.bac.LAC <- speedyseq::psmelt(bac.abund.LAC)
+data_glom.bac.LAC$Genus <- as.character(data_glom.bac.LAC$Genus)
+
+data_glom.bac.CLC <- speedyseq::psmelt(bac.abund.CLC)
+data_glom.bac.CLC$Genus <- as.character(data_glom.bac.CLC$Genus)
+```
+
+```{r}
+data_glom.bac.LAC$Genus[data_glom.bac.LAC$Abundance < 0.005] <- "others"
+data_glom.bac.CLC$Genus[data_glom.bac.CLC$Abundance < 0.005] <- "others"
+```
+
+```{r}
+# Extract percentage data
+percentage_data <- data_glom.bac.CLC %>%
+  group_by(Incubation, Genus) %>%
+  summarize(Percentage = sum(Abundance)) %>%
+  group_by(Incubation) %>%
+  mutate(Percentage = Percentage / sum(Percentage) * 100) %>%
+  gather(key = "Genus", value = "Percentage", -Incubation)
+
+# View the percentage data
+print(percentage_data)
+```
+
+```{r}
+write.csv(percentage_data, file = "D:/Biocrust_Reawakening/New_data/Fungi/CLC_Genus_percentage_data.csv", row.names = FALSE)
+```
+
+```{r}
+Count.LAC = length(unique(data_glom.bac.LAC$Genus))
+Count.LAC
+
+Count.CLC = length(unique(data_glom.bac.CLC$Genus))
+Count.CLC
+```
+
+```{r}
+# Merge the two datasets for consistent color mapping
+data_glom_combined <- bind_rows(
+  mutate(data_glom.bac.LAC, Group = "LAC"),
+  mutate(data_glom.bac.CLC, Group = "CLC")
+)
+```
+```{r}
+unique(data_glom_combined$Genus)
+```
+
+
+```{r}
+#for LAC Order
+data_glom_combined$Genus <- factor(data_glom_combined$Genus, levels = c(
+"unclassified_k_Fungi" ,
+"unclassified_p_Ascomycota" ,
+"unclassified_c_Dothideomycetes"  ,
+"unclassified_c_Sordariomycetes", 
+"Podospora" ,
+"Fimetariella",
+"unclassified_o_Pleosporales"  ,  
+"unclassified_f_Didymellaceae"  ,
+"unclassified_f_Pleosporaceae" , 
+"Leptosphaerulina" ,
+"Macroventuria" ,
+"Nothophoma" ,
+"Thyrostroma" ,
+"Alternaria" ,
+"Preussia" ,
+"Deniquelata",
+"unclassified_o_Hypocreales"  ,  
+"Fusarium" ,
+"unclassified_o_Eurotiales" ,   
+"unclassified_o_Dothideales" , 
+"unclassified_o_Lichenostigmatales",
+"unclassified_o_Trapeliales" ,  
+"unclassified_o_Botryosphaeriales" ,
+"unclassified_o_Onygenales"  ,
+"unclassified_o_Chaetothyriales" ,
+"Coniochaeta"  ,
+"Coniosporium",
+"unclassified_o_Helotiales", 
+"unclassified_f_Rutstroemiaceae",
+"unclassified_o_Orbiliales" , 
+"unclassified_o_Pezizales",  
+"unclassified_o_Xylariales" ,
+"unclassified_o_Capnodiales" ,
+"unclassified_o_Umbilicariales",
+"unclassified_p_Basidiomycota" ,
+"unclassified_o_Tremellales",
+"unclassified_o_Agaricales" ,  
+"Amanita" ,
+"Entoloma",
+"Naganishia",
+"Filobasidium",
+"Basidiobolus"
+
+
+
+
+
+
+))
+```
+```{r}
+data_glom_combined$Phylum <- factor(data_glom_combined$Phylum, levels = c(
+"Ascomycota" ,
+"Basidiomycota" ,
+"Basidiobolomycota" ,
+"Unknown"
+))
+```
+
+```{r}
+data_glom_combined$Incubation = factor(data_glom_combined$Incubation, levels = c("0.05","1","24","48","96"))
+data_glom_combined$Group <- factor(data_glom_combined$Group, levels = c("LAC", "CLC"))
+```
+
+```{r}
+# Italicize only the genus (first word)
+genus_labels <- function(x) {
+  sapply(x, function(i) {
+    if (grepl("^unclassified", i) || grepl("^[A-Z0-9-]+$", i)) {
+      # Leave unclassified or code-only names unchanged
+      i
+    } else {
+      parts <- strsplit(i, " ", fixed = TRUE)[[1]]
+      if (length(parts) == 1) {
+        paste0("italic('", parts[1], "')")
+      } else {
+        paste0(
+          "italic('", parts[1], "')~'",
+          paste(parts[-1], collapse = " "),
+          "'"
+        )
+      }
+    }
+  })
+}
+```
+
+```{r}
+
+# The palette with black:
+cbbPalette <-
+  c(
+"unclassified_k_Fungi" = "#CECC9C",
+"unclassified_p_Ascomycota" = "tomato4" ,
+"unclassified_c_Dothideomycetes" = "indianred2" ,
+"unclassified_c_Sordariomycetes" = "#ce4616", 
+"Podospora" = "orangered2" ,
+"Fimetariella" =  "orangered",
+"unclassified_o_Pleosporales" = "darkgreen"  ,  
+"unclassified_f_Didymellaceae" = "darkolivegreen4", 
+"unclassified_f_Pleosporaceae" = "seagreen1", 
+"Leptosphaerulina" =   "darkolivegreen2",
+"Macroventuria" = "forestgreen" ,
+"Nothophoma" = "seagreen",
+"Thyrostroma" = "#00FF00",
+"Alternaria" =  "limegreen",
+"Preussia" = "seagreen3",
+"Deniquelata" = "darkolivegreen", 
+"unclassified_o_Hypocreales" = "darkorchid4" ,  
+"Fusarium" = "darkorchid1",
+"unclassified_o_Eurotiales" = "#5e70de",   
+"unclassified_o_Dothideales" = "darkgoldenrod1", 
+"unclassified_o_Lichenostigmatales" = "goldenrod3",
+"unclassified_o_Trapeliales" = "#f08f6d",  
+"unclassified_o_Botryosphaeriales" =  "sienna3",
+"unclassified_o_Onygenales" = "antiquewhite4" ,
+"unclassified_o_Chaetothyriales" =  "burlywood1",
+"Coniochaeta" = "burlywood3" ,
+"Coniosporium" = "burlywood2",
+"unclassified_o_Helotiales" = "deeppink" , 
+"unclassified_f_Rutstroemiaceae" = "deeppink3",
+"unclassified_o_Orbiliales" = "#283cb7" , 
+"unclassified_o_Pezizales"= "salmon" ,  
+"unclassified_o_Xylariales" =   "dodgerblue3" ,
+"unclassified_o_Capnodiales" = "indianred",
+"unclassified_o_Umbilicariales" = "violetred4",
+"unclassified_p_Basidiomycota" = "gold4" ,
+"unclassified_o_Tremellales" = "yellow1",
+"unclassified_o_Agaricales" = "gold3",  
+"Amanita" = "gold",
+"Entoloma" = "yellow3",
+"Naganishia" = "gold2",
+"Filobasidium" = "khaki1",
+"Basidiobolus" = "yellow2"
+)
+```
+
+```{r}
+cbbPalette <- c(
+  Ascomycota = "#802B51",
+  Basidiomycota = "#CDCD42",
+  Basidiobolomycota = "#F4BC43",
+  Mucoromycota = "#6092C8",
+  Blastocladiomycota = "#E29E37",
+  Mortierellomycota = "#3A8489",
+  Rozellomycota = "#C06EC4",
+  Chytridiomycota = "#458933",
+  Entomophthoromycota = "#BC3830",
+  Unknown = "#CECCA1"
+)
+```
+
+```{r}
+# Ensure consistent levels for the "Genus" factor
+data_glom_combined$Genus <- factor(data_glom_combined$Genus, levels = names(cbbPalette))
+```
+
+```{r}
+# Define your standard sizes
+size_title <- 14
+size_axis <- 14
+size_label <- 10
+main_font <- "serif" # Time news roman
+```
+
+```{r}
+facet_wrap(
+  ~Group,
+  labeller = labeller(Group = c(
+    LAC = "Light cyanobacteria crust",
+    CLC = "Cyanolichen crust"
+  ))
+)
+```
+
+```{r fig.height=5, fig.width=7.5, fig.align="center"}
+jpeg("./Fungi/Figures/Taxcom_Genus_Fun_0.05.jpeg", units="in", width = 10, height = 7, res = 600 )
+
+# Create the combined plot
+plot_Fun_Phylum <- ggplot(
+  data_glom_combined,
+  aes(x = Incubation, y = Abundance, fill = Genus)
+) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_x_discrete(labels = c("0.05H", "1H", "24H", "48H", "96H")) +
+  scale_fill_manual(values = cbbPalette,
+                    labels = function(x) parse(text = genus_labels(x))) +
+  facet_wrap(
+    ~Group,
+    labeller = labeller(Group = c(
+      LAC = "Light cyanobacterial crust",
+      CLC = "Cyanolichen crust"
+    ))
+  ) +
+  ggtitle("Fungal Taxonomic Composition") +
+  theme_bw() +
+  theme_pubr(border = TRUE) +
+  theme(
+    text = element_text(family = main_font),
+    plot.title = element_text(size = size_title, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = size_axis),
+    axis.text.x = element_text(size = size_label, color = "black", angle = 45, hjust = 1),
+    legend.title = element_text(size = size_axis, face = "bold"),
+    legend.text = element_text(size = size_label),
+    strip.text = element_text(size = 13, face = "bold"),
+    panel.grid = element_blank()
+  )
+
+# Display the plot
+print(plot_Fun_Phylum + theme(legend.position="right") + guides(fill=guide_legend(ncol= 2)))
+```
+```{r}
+ggsave("D:/Biocrust_Reawakening/iscience/Figures/Figure3A_TaxCom_Genus_Fun.png", 
+       plot = last_plot(), 
+       device = "png", 
+       width = 250,    # 180mm is standard full-page width
+       height = 150, 
+       units = "mm", 
+       dpi = 300)
+```
+
+
+#### Alpha diversity
+
+```{r}
+sample_data(physeq.LAC)$Incubation = factor(sample_data(physeq.LAC)$Incubation, levels = c("0.05", "1", "24", "48", "96"))
+
+sample_data(physeq.CLC)$Incubation = factor(sample_data(physeq.CLC)$Incubation, levels = c("0.05", "1", "24", "48", "96"))
+```
+
+```{r}
+alpha.diversity = estimate_richness(physeq.CLC, measures = c("Shannon"))
+data.anova = cbind(sample_data(physeq.CLC), alpha.diversity)
+#leveneTest(Observed ~ Incubation, data = data.anova)
+physeq.anova = aov(Shannon ~ Incubation, data.anova)
+summary(physeq.anova)
+```
+
+```{r}
+tukey.ps = TukeyHSD(x=physeq.anova, 'Incubation', conf.level = 0.95)
+
+generate_label_df <- function(tukey.ps, variable){
+ 
+     # Extract labels and factor levels from Tukey post-hoc 
+     Tukey.levels <- tukey.ps[[variable]][,4]
+     Tukey.labels <- data.frame(multcompLetters(Tukey.levels)['Letters'])
+     
+     #I need to put the labels in the same order as in the boxplot :
+     Tukey.labels$treatment=rownames(Tukey.labels)
+     Tukey.labels=Tukey.labels[order(Tukey.labels$treatment) , ]
+     return(Tukey.labels)
+     }
+
+LABELS=generate_label_df(tukey.ps, 'Incubation')
+names(LABELS) = c('Letters','Incubation')
+```
+
+```{r}
+LABELS
+```
+
+```{r}
+ylabel <- data.frame("ylabel" = c(4, 4, 4, 3.5, 3.5)) #LAC surface
+LABELS$ylabel<-ylabel$ylabel
+```
+
+```{r}
+jpeg("./Fungi/Figures/Fun_Alpha_CLC_Shannon.jpeg", units="in", width = 5.5, height = 4.5, res = 600 )
+
+#pdf("D:/Biocrust_Reawakening/Github/Fungi(ITS)/Figures/BAC_Alpha_CLC_Shannon.pdf",width = 8.5, height = 5.5)
+
+custom_palette <- c("0.05" = "#F8766D", "1" = "#A3A500", "24" = "#00BF7D", "48" = "#00B0F6", "96" = "#E76BF3")
+
+physeq.plot.richness.incubation <- plot_richness(physeq.CLC, x = "Incubation", color = "Incubation", measures = c("Shannon")) + 
+  geom_boxplot(aes(fill = Incubation), color = "black", lwd = 0.7) + 
+  ggtitle("Fungal Alpha Diversity of Cyanolichen crust") + 
+  annotate("text", x = 3, y = 4.5, label = "ANOVA, p = 0.0141") +
+  scale_x_discrete(labels = c("0.05H", "1H", "24H", "48H", "96H")) +
+  theme_pubr(border = TRUE, legend = "none") + 
+  
+  theme(
+    text = element_text(family = main_font),
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    strip.text = element_text(size = 14, face = "bold"),  # Shannon
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  ) +
+  scale_colour_manual(values = custom_palette) +
+  scale_fill_manual(values = custom_palette) +
+  geom_text(data = LABELS, aes(x = Incubation, y = ylabel, label = Letters))
+
+physeq.plot.richness.incubation
+```
+
+#Alpha diversity of targeted taxa
+
+```{r}
+physeq.cb = subset_taxa(physeq.LAC, Order == "Pleosporales")
+physeq.cb
+```
+
+```{r}
+sample_data(physeq.cb)$Incubation = factor(sample_data(physeq.cb)$Incubation, levels = c("0.05", "1", "24", "48", "96"))
+```
+
+```{r}
+alpha.diversity = estimate_richness(physeq.cb, measures = c("Observed"))
+data.anova = cbind(sample_data(physeq.cb), alpha.diversity)
+#leveneTest(Observed ~ Incubation, data = data.anova)
+physeq.anova = aov(Observed ~ Incubation, data.anova)
+summary(physeq.anova)
+```
+
+```{r}
+tukey.ps = TukeyHSD(x=physeq.anova, 'Incubation', conf.level = 0.95)
+
+generate_label_df <- function(tukey.ps, variable){
+ 
+     # Extract labels and factor levels from Tukey post-hoc 
+     Tukey.levels <- tukey.ps[[variable]][,4]
+     Tukey.labels <- data.frame(multcompLetters(Tukey.levels)['Letters'])
+     
+     #I need to put the labels in the same order as in the boxplot :
+     Tukey.labels$treatment=rownames(Tukey.labels)
+     Tukey.labels=Tukey.labels[order(Tukey.labels$treatment) , ]
+     return(Tukey.labels)
+     }
+
+LABELS=generate_label_df(tukey.ps, 'Incubation')
+names(LABELS) = c('Letters','Incubation')
+```
+
+```{r}
+LABELS
+```
+
+```{r}
+ylabel <- data.frame("ylabel" = c(80, 80, 60, 80, 80)) 
+LABELS$ylabel<-ylabel$ylabel
+```
+
+```{r}
+tiff("D:/Biocrust_Reawakening/New_data/Fungi/Figures/Fun_Alpha_LAC_Observed_Pleosporales.tiff", units="in", width = 4.5, height = 6, res = 600 )
+
+#pdf("D:/Biocrust_Reawakening/Github/Fungi(ITS)/Figures/BAC_Alpha_CLC_Shannon.pdf",width = 8.5, height = 5.5)
+
+custom_palette <- c("0.05" = "#F8766D", "1" = "#A3A500", "24" = "#00BF7D", "48" = "#00B0F6", "96" = "#E76BF3")
+
+physeq.plot.richness.incubation <- plot_richness(physeq.cb, x = "Incubation", color = "Incubation", measures = c("Observed")) + 
+  geom_boxplot(aes(fill = Incubation), color = "black", lwd = 0.7) + 
+  ggtitle("Pleosporales in LAC crust type") + 
+  annotate("text", x = 3, y = 100, label = "ANOVA, p = 0.00371") +
+  theme_pubr(border = TRUE, legend = "none") + 
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_colour_manual(values = custom_palette) +
+  scale_fill_manual(values = custom_palette) +
+  geom_text(data = LABELS, aes(x = Incubation, y = ylabel, label = Letters))
+
+physeq.plot.richness.incubation
+```
+
+-------------------------------------------------------------------------------------------------------------------------
+
+### Beta diversity with NMDS plot analysis
+
+```{r}
+sample_data(physeq.prune)$Incubation = factor(sample_data(physeq.prune)$Incubation, levels = c("0.05", "1", "24", "48", "96"))
+sample_data(physeq.prune)$Crusttype = factor(sample_data(physeq.prune)$Crusttype, levels = c("CLC", "LAC"))
+
+sample_data(physeq.LAC)$Incubation = factor(sample_data(physeq.LAC)$Incubation, levels = c("0.05", "1", "24", "48", "96"))
+
+sample_data(physeq.CLC)$Incubation = factor(sample_data(physeq.CLC)$Incubation, levels = c("0.05", "1", "24", "48", "96"))
+```
+
+```{r}
+physeq_ord <- ordinate(physeq.LAC,method = "NMDS",distance =  "bray")
+```
+
+```{r}
+ps.dist.all = phyloseq::distance(physeq.LAC, "bray")
+```
+
+```{r}
+adonis2(ps.dist.all ~Incubation, as(sample_data(physeq.LAC),"data.frame"))
+```
+
+```{r}
+jpeg("./Fungi/Figures/Fun_Beta_LCC.jpeg", units="in", width = 6.5, height = 4.5, res = 600 )
+
+pslayer = plot_ordination(physeq.LAC, physeq_ord, type = "samples", color = "Incubation") + 
+  ggtitle("Fungal Beta Diversity of Light cyanobacterial crust") + 
+  annotate( "text",
+  x = 1.3, y = 1.2, label = "PERMANOVA*','~~italic(p)==0.001*','~~R^2==0.377", parse = TRUE) +
+  geom_point(size=4) + 
+  scale_colour_manual(values =  c("#F8766D" , "#A3A500" , "#00BF7D",  "#00B0F6", "#E76BF3"),
+                      labels = c("0.05H", "1H", "24H", "48H", "96H")) + 
+  theme_pubr(legend = "right", border = TRUE) +
+  theme(
+    text = element_text(family = main_font),
+    plot.title = element_text(size = size_title, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = size_axis),
+    axis.text.x = element_text(size = size_label, hjust = 1),
+    legend.title = element_text(size = size_axis, face = "bold"),
+    legend.text = element_text(size = size_label),
+    strip.text = element_text(size = 13, face = "bold"),
+    panel.grid = element_blank()
+  ) + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+pslayer
+```
+
+```{r}
+pslayer = plot_ordination(physeq.prune, physeq_ord, type = "samples", color = "Incubation", shape = "Crusttype") + ggtitle("Fungal Beta Diversity (PCoA) Overall") + 
+  annotate("text", x = 1.8, y = 0.8, cex = 4.5, label = "PERMANOVA, p = 0.001") +
+  geom_point(size=4) +
+  scale_colour_manual(values = c("#F8766D" , "#A3A500" , "#00BF7D",  "#00B0F6", "#E76BF3", "red", "blue")) + 
+  theme_pubr(legend = "right", border = TRUE) + 
+  theme(plot.title = element_text(hjust = 0.5)) +
+  stat_ellipse(aes(color = Crusttype), geom = "path", type = "norm", level = 0.95, 
+               linewidth = 0.5, linetype = "dashed", show.legend = TRUE
+  )
+   
+
+pslayer
+```
+
+```{r}
+tiff("D:/Biocrust_Reawakening/New_data/Fungi/Figures/Fun_Beta_LAC_NMDS.tiff", units="in", width = 6, height = 4.5, res = 600 )
+plot
+
+dev.off()
+
+```

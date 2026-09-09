@@ -1,0 +1,727 @@
+```{r warning=FALSE, message=FALSE}
+library(ape)
+library(vegan)
+library(plyr)
+library(dplyr)
+library(scales)
+library(grid)
+library(reshape2)
+library(phyloseq)
+library(magrittr)                        
+library(ggplot2)
+library(ggpubr)
+library(data.table)
+library(tidyr)
+library(tidyverse)
+library(multcompView)
+library(car)
+library(microViz)
+```
+
+```{r}
+getwd()
+```
+
+```{r}
+###Input 16S 
+otus.bac <- read.table("./Baceria/Data/CrustTemp216SasvUN3.asv_table_fix.txt", header = TRUE, sep = "\t", row.names = 1)
+colnames(otus.bac) <- gsub("X", "", colnames(otus.bac))  # Remove "X" from all column names
+otumat16s <- as.matrix(otus.bac)
+OTU16s <- otu_table(otumat16s, taxa_are_rows = TRUE)
+```
+
+```{r}
+taxmat16s <- read.table("./Baceria/Data/bac_tax_fix.csv", header=T,sep=",",row.names=1)
+taxmat16s <- as(as.matrix(taxmat16s),"matrix")
+TAX16s <- tax_table(taxmat16s)
+```
+
+```{r}
+meta16s <- read.table("./Baceria/Data/CrustTemp216SasvUN3.mapping_file_fix.txt",header=TRUE,row.names=1,sep="\t",stringsAsFactors=FALSE)
+
+sampleData16s <- sample_data(meta16s)
+```
+
+```{r}
+bac.tree <- read_tree("./Baceria/Data/tree.nwk")
+```
+
+```{r}
+physeq16s <- phyloseq(OTU16s,TAX16s,sampleData16s, bac.tree)
+physeq16s
+```
+```{r}
+
+physeq16s <- subset_taxa(physeq16s, Kingdom == "Bacteria")
+physeq16s
+physeq16s<- subset_taxa(physeq16s, Family != "Mitochondria")
+physeq16s
+#physeq16s <- subset_taxa(physeq16s, Species != "NA")
+#physeq16s <- subset_taxa(physeq16s, Species != "uncultured bacterium")
+#physeq16s <- subset_taxa(physeq16s, Species != "metagenome")
+
+physeq16S.prune = prune_taxa(taxa_sums(physeq16s) > 1, physeq16s)
+physeq16S.prune
+```
+
+### Rarefraction curve
+
+Check read counts: any samples that have very low reads should be removed.
+[Ref](http://evomics.org/wp-content/uploads/2016/01/phyloseq-Lab-01-Answers.html)
+
+```{r}
+readcount = data.table(as(sample_data(physeq16S.prune), "data.frame"),
+                 TotalReads = sample_sums(physeq16S.prune), 
+                 keep.rownames = TRUE)
+setnames(readcount, "rn", "SampleID")
+
+#For plotting, use command below.
+SeqDepth = ggplot(readcount, aes(TotalReads)) + geom_histogram() + ggtitle("Sequencing Depth")
+```
+
+TotalReads of all the samples can be in this table (select only SampleID and TotalReads columns).
+In order to check samples with low number of reads, "order()" can be used to sort "TotalReads" column.
+In this dataset, N55.Rhizo has very low number of reads, so will will filter this sample out using the next minimum number of reads.
+```{r}
+readcount = readcount[order(readcount$TotalReads), c("SampleID", "TotalReads")]
+```
+
+```{r}
+as.data.frame(readcount)
+```
+
+Extract OTU table, transpose and convert to data frame
+Extract OTU table from phyloseq object as data frame and use vegan to calculate rarefaction curve
+```{r}
+otu.rare <- otu_table(physeq16S.prune)
+otu.rare <- as.data.frame(t(otu.rare))
+sample_names <- rownames(otu.rare)
+
+#vegan rarecurve 
+png("D:/Biocrust_Reawakening/Github/Bacteria(16S)/Figures/Rarefraction16S.png", units="in", width = 8.5, height = 6, res = 600 )
+otu.rarecurve <- rarecurve(otu.rare, step = 500, sample = 55000, label = T)
+#dev.off()
+```
+
+```{r}
+otu.rare <- otu_table(physeq16S.prune)
+otu.rare <- as.data.frame(t(otu.rare))
+sample_names <- rownames(otu.rare)
+
+#vegan rarecurve 
+png("D:/Biocrust_Reawakening/Github/Fungi(ITS)/Figures/Rarefraction.png", units="in", width = 9.5, height = 7, res = 600 )
+otu.rarecurve <- rarecurve(otu.rare, step = 100, sample = 50000, label = T)
+dev.off()
+```
+
+
+### Taxonomic composition
+
+
+```{r}
+physeq.LAC <- subset_samples(physeq16S.prune, Crusttype=="LAC")
+physeq.LAC
+
+physeq.CLC <- subset_samples(physeq16S.prune, Crusttype=="CLC")
+physeq.CLC
+```
+
+```{r}
+glom.bac.LAC <- speedyseq::tax_glom(physeq.LAC,taxrank = "Phylum")
+glom.bac.LAC
+
+glom.bac.CLC <- speedyseq::tax_glom(physeq.CLC,taxrank = "Phylum")
+glom.bac.CLC
+```
+
+
+```{r}
+head(tax_table(glom.bac.LAC))
+```
+
+```{r}
+bac.abund.LAC <- merge_samples(glom.bac.LAC, "Incubation")
+sample_data(glom.bac.LAC)$Incubation <- factor(sample_names(glom.bac.LAC))
+bac.abund.LAC = transform_sample_counts(bac.abund.LAC, function(x) x / sum(x))
+bac.abund.LAC
+
+bac.abund.CLC <- merge_samples(glom.bac.CLC, "Incubation")
+sample_data(glom.bac.CLC)$Incubation <- factor(sample_names(glom.bac.CLC))
+bac.abund.CLC = transform_sample_counts(bac.abund.CLC, function(x) x / sum(x))
+bac.abund.CLC
+```
+```{r}
+data_glom.bac.LAC <- speedyseq::psmelt(bac.abund.LAC)
+data_glom.bac.LAC$Phylum <- as.character(data_glom.bac.LAC$Phylum)
+
+data_glom.bac.CLC <- speedyseq::psmelt(bac.abund.CLC)
+data_glom.bac.CLC$Phylum <- as.character(data_glom.bac.CLC$Phylum)
+```
+
+```{r}
+data_glom.bac.LAC$Phylum[data_glom.bac.LAC$Abundance < 0.005] <- "others"
+data_glom.bac.CLC$Phylum[data_glom.bac.CLC$Abundance < 0.005] <- "others"
+```
+
+```{r}
+# Extract percentage data
+percentage_data <- data_glom.bac.CLC %>%
+  group_by(Incubation, Phylum) %>%
+  summarize(Percentage = sum(Abundance)) %>%
+  group_by(Incubation) %>%
+  mutate(Percentage = Percentage / sum(Percentage) * 100) %>%
+  gather(key = "Phylum", value = "Percentage", -Incubation)
+
+# View the percentage data
+print(percentage_data)
+```
+
+```{r}
+write.csv(percentage_data, file = "D:/Biocrust_Reawakening/New_data/Bacteria/CLC_Genus_percentage_data.csv", row.names = FALSE)
+```
+
+
+```{r}
+# Merge the two datasets for consistent color mapping
+data_glom_combined <- bind_rows(
+  mutate(data_glom.bac.LAC, Group = "LAC"),
+  mutate(data_glom.bac.CLC, Group = "CLC")
+)
+
+# Ensure consistent levels for the "Genus" factor
+#data_glom_combined$Genus <- factor(data_glom_combined$Genus, levels = names(cbbPalette))
+```
+
+```{r}
+Count = length(unique(data_glom_combined$Phylum))
+Count
+```
+
+```{r}
+unique((data_glom_combined$Phylum))
+```
+
+```{r}
+data_glom_combined$Genus <- factor(data_glom_combined$Genus, levels = c(
+"unclassified_o_Oxyphotobacteria Incertae Sedis",
+"unclassified_o_Nostocales" ,
+"unclassified_f_Coleofasciculaceae" ,
+"unclassified_f_Cyanobacteriaceae"  ,
+"unclassified_f_Nostocaceae" ,
+"Tychonema CCAP 1459-11B" ,
+"Symplocastrum CPER-KK1" ,
+"Microcoleus SAG 1449-1a" ,
+"Microcoleus PCC-7113" ,
+"Wilmottia Ant-Ph58" ,
+"Trichocoleus SAG 26.92"  ,
+"Mastigocladopsis PCC-10914"   ,
+"Microcoleus Es-Yyy1400" ,
+"Nostoc PCC-73102",
+"Scytonema UTEX 2349" ,
+"CENA359" ,
+"Aliterella CENA595",
+
+"unclassified_f_AKIW781",
+"unclassified_f_Ardenticatenaceae",
+"unclassified_f_Roseiflexaceae",
+
+"unclassified_f_Burkholderiaceae"   ,
+"unclassified_f_Caulobacteraceae" ,
+"unclassified_f_Sphingomonadaceae"    ,
+"unclassified_f_Archangiaceae" ,
+"unclassified_f_Myxococcaceae"  ,
+"unclassified_f_Beijerinckiaceae" ,
+"unclassified_f_0319-6G20",
+"unclassified_f_Acetobacteraceae",
+"unclassified_f_Polyangiaceae",
+"Microvirga" ,
+"Azospirillum",
+"Rubellimicrobium" ,
+"Massilia" ,
+"Noviherbaspirillum"  ,
+"Ellin6055" , 
+"Craurococcus" ,
+"Magnetospirillum sp. enrichment culture clone Van25" ,
+"MN 122.2a" ,
+"Nitrospirillum" ,
+"Paucimonas" ,
+"Ramlibacter" ,
+"Sphingoaurantiacus" ,
+"Telmatospirillum" ,
+
+"unclassified_f_Micromonosporaceae" ,
+"Geodermatophilus" ,
+"Rubrobacter"  ,
+"Arthrobacter",
+"Pseudonocardia" ,
+
+"unclassified_f_Spirosomaceae" ,
+"Cnuella" ,
+"Adhaeribacter" ,
+"Hymenobacter" ,
+"Rhodocytophaga" ,
+
+"unclassified_f_Family XVIII" ,
+"unclassified_f_Paenibacillaceae" ,
+"unclassified_f_Planococcaceae" ,
+"Clostridium sensu stricto 10",
+"Tumebacillus" ,
+"Paenibacillus" ,
+"Bacillus" ,
+"Clostridium sensu stricto 8", 
+"Clostridium sensu stricto 1" ,
+"Brevibacillus" ,
+"Azohydromonas",
+"Fonticella" ,
+
+"unclassified_f_Gemmataceae",
+"unclassified_f_Longimicrobiaceae" ,
+"Gemmatirosa" ,
+"Longimicrobium" ,
+
+"unclassified_f_Blastocatellaceae",
+"Blastocatella" ,
+
+"unclassified_f_Fimbriimonadaceae",
+"others"
+))
+```
+
+```{r}
+
+cbbPalette <- c(
+  # --- CYANOBACTERIA (Greens) ---
+  "unclassified_o_Oxyphotobacteria Incertae Sedis" = "#458B00", # chartreuse4
+  "unclassified_o_Nostocales"                      = "#66CD00", # chartreuse3
+  "unclassified_f_Coleofasciculaceae"              = "#76EE00", # chartreuse2
+  "unclassified_f_Cyanobacteriaceae"               = "#A2CD5A", # darkolivegreen3
+  "unclassified_f_Nostocaceae"                    = "#C0FF3E", # chartreuse1
+  "Tychonema CCAP 1459-11B"                        = "#556B2F", # darkolivegreen
+  "Symplocastrum CPER-KK1"                         = "#6E8B3D", # darkolivegreen4
+  "Microcoleus SAG 1449-1a"                        = "#8FBC8F", # darkseagreen
+  "Microcoleus PCC-7113"                           = "#228B22", # forestgreen
+  "Wilmottia Ant-Ph58"                             = "#006400", # darkgreen
+  "Trichocoleus SAG 26.92"                         = "#2E8B57", # seagreen
+  "Mastigocladopsis PCC-10914"                     = "#3CB371", # mediumseagreen
+  "Microcoleus Es-Yyy1400"                         = "#00FF7F", # springgreen
+  "Nostoc PCC-73102"                               = "#00C957", # emerald green
+  "Scytonema UTEX 2349"                            = "#90EE90", # lightgreen
+  "CENA359"                                        = "#00FA9A", # mediumspringgreen
+  "Aliterella CENA595"                             = "#BDFCC9",
+
+  # --- CHLOROFLEXI (Oranges/Siennas) ---
+  "unclassified_f_AKIW781"                         = "#CD661D", # sienna3
+  "unclassified_f_Ardenticatenaceae"               = "#E69F00", # orange
+  "unclassified_f_Roseiflexaceae"                  = "#FF8C00", # darkorange
+
+  # --- PROTEOBACTERIA (Blues) ---
+  "unclassified_f_Burkholderiaceae"                = "#104E8B", # dodgerblue4
+  "unclassified_f_Caulobacteraceae"                = "#1E90FF", # dodgerblue
+  "unclassified_f_Sphingomonadaceae"               = "#63B8FF", # dodgerblue1
+  "unclassified_f_Archangiaceae"                   = "#00BFFF", # deepskyblue
+  "unclassified_f_Myxococcaceae"                   = "#00008B", # darkblue
+  "unclassified_f_Beijerinckiaceae"                = "#4682B4", # steelblue
+  "unclassified_f_0319-6G20"                       = "#5CACEE", # steelblue2
+  "unclassified_f_Acetobacteraceae"                = "#009ACD", # deepskyblue3
+  "unclassified_f_Polyangiaceae"                   = "#00CED1", # darkturquoise
+  "Microvirga"                                     = "#add8e6", # lightblue
+  "Azospirillum"                                   = "#87CEFA", # lightskyblue
+  "Rubellimicrobium"                               = "#B0E2FF", # lightblue1
+  "Massilia"                                       = "#00441B", # deep teal
+  "Noviherbaspirillum"                             = "#2B8CBE", 
+  "Ellin6055"                                      = "#A6BDDB",
+  "Craurococcus"                                   = "#36648B",
+  "Magnetospirillum sp. enrichment culture clone Van25" = "#5F9EA0", # cadetblue
+  "MN 122.2a"                                      = "#00688B", # deepskyblue4
+  "Nitrospirillum"                                 = "#708090", # slate gray
+  "Paucimonas"                                     = "#4F94CD", # steelblue3
+  "Ramlibacter"                                    = "#B0C4DE", # lightsteelblue
+  "Sphingoaurantiacus"                             = "#6495ED", # cornflowerblue
+  "Telmatospirillum"                               = "#0000CD", # mediumblue
+
+  # --- ACTINOBACTERIA (Creams/Purples) ---
+  "unclassified_f_Micromonosporaceae"              = "#FFFACD", # lemonchiffon
+  "Geodermatophilus"                               = "#EEDC82", # silk
+  "Rubrobacter"                                    = "#CDC673", # darkkhaki
+  "Arthrobacter"                                   = "#FFF8DC", # cornsilk
+  "Pseudonocardia"                                 = "#FFEFD5", # papayawhip
+
+  # --- BACTEROIDETES (Tan/Browns) ---
+  "unclassified_f_Spirosomaceae"                   = "#DEB887", # burlywood
+  "Cnuella"                                        = "#D2B48C", # tan
+  "Adhaeribacter"                                  = "#BC8F8F", # rosybrown
+  "Hymenobacter"                                   = "#8B7355", # burlywood4
+  "Rhodocytophaga"                                 = "#CDAA7D", # burlywood3
+
+  # --- FIRMICUTES (Chocolates/Reds) ---
+  "unclassified_f_Family XVIII"                    = "#D2691E", # chocolate
+  "unclassified_f_Paenibacillaceae"                = "#8B4513", # saddlebrown
+  "unclassified_f_Planococcaceae"                  = "#A0522D", # sienna
+  "Clostridium sensu stricto 10"                   = "#FF4500", # orangered
+  "Tumebacillus"                                   = "#CD3333", # brown3
+  "Paenibacillus"                                  = "#8B2323", # brown4
+  "Bacillus"                                       = "#BC1717", 
+  "Clostridium sensu stricto 8"                    = "#800000", # maroon
+  "Clostridium sensu stricto 1"                    = "#B22222", # firebrick
+  "Brevibacillus"                                  = "#A52A2A", # brown
+  "Azohydromonas"                                  = "#E9967A", # darksalmon
+  "Fonticella"                                     = "#FA8072", # salmon
+
+  # --- GEMMATIMONADETES (Golds) ---
+  "unclassified_f_Gemmataceae"                     = "#DAA520", # goldenrod
+  "unclassified_f_Longimicrobiaceae"               = "#B8860B", # darkgoldenrod
+  "Gemmatirosa"                                    = "#FFD700", # gold
+  "Longimicrobium"                                 = "#EEB422", # goldenrod2
+
+  # --- ACIDOBACTERIA/OTHERS (Various) ---
+  "unclassified_f_Blastocatellaceae"               = "#FFD300",
+  "Blastocatella"                                  = "#CDAD00", # gold3
+  "unclassified_f_Fimbriimonadaceae"               = "#9ACD32", # yellowgreen
+  "others"                                         = "#868280"
+)
+
+```
+
+```{r}
+data_glom_combined$Phylum <- factor(data_glom_combined$Phylum, levels = c(
+"Cyanobacteria",
+"Proteobacteria",
+"Firmicutes" ,
+"Actinobacteria",
+"Bacteroidetes" ,     
+"Gemmatimonadetes" ,
+"Acidobacteria",
+"FBP" ,
+"Chloroflexi",
+"Planctomycetes" ,
+"Verrucomicrobia",
+"Deinococcus-Thermus",
+"Armatimonadetes" ,
+"Nitrospirae" ,
+"Patescibacteria"  ,
+"Fibrobacteres" ,
+"WPS-2",
+"others" 
+))
+
+```
+```{r}
+cbbPalette <- c(
+  "Cyanobacteria"       = "chartreuse3",
+  "Proteobacteria"      = "skyblue3",
+  "Firmicutes"          = "chocolate3",
+  "Actinobacteria"      = "antiquewhite2",
+  "Bacteroidetes"       = "burlywood1",
+  "Gemmatimonadetes"    = "darkgoldenrod4",
+  "Acidobacteria"       = "gold3",
+  "FBP"                 = "plum3",
+  "Chloroflexi"         = "sienna2",
+  "Planctomycetes"      = "darkgoldenrod1",
+  "Verrucomicrobia"     = "orchid4",
+  "Deinococcus-Thermus" = "mediumpurple1",
+  "Armatimonadetes"     = "gold4",
+  "Nitrospirae"         = "firebrick",
+  "Patescibacteria"     = "lightseagreen",
+  "Fibrobacteres"       = "darkolivegreen4",
+  "WPS-2"               = "tomato3",
+  "others"              = "#868280"
+)
+```
+
+```{r}
+# Ensure consistent levels for the "Genus" factor
+data_glom_combined$Genus <- factor(data_glom_combined$Genus, levels = names(cbbPalette))
+```
+
+```{r}
+data_glom_combined$Incubation = factor(data_glom_combined$Incubation, levels = c("0.05","1","24","48","96"))
+data_glom_combined$Group <- factor(data_glom_combined$Group, levels = c("LAC", "CLC"))
+```
+
+```{r}
+data_glom_combined <- data_glom_combined[!grepl("others", data_glom_combined$Genus), ]
+```
+
+```{r}
+# Define your standard sizes
+size_title <- 14
+size_axis <- 14
+size_label <- 10
+main_font <- "serif" # Time news roman
+```
+
+```{r}
+facet_wrap(
+  ~Group,
+  labeller = labeller(Group = c(
+    LAC = "Light cyanobacteria crust",
+    CLC = "Cyanolichen crust"
+  ))
+)
+```
+```{r}
+# Italicize only the genus (first word)
+genus_labels <- function(x) {
+  sapply(x, function(i) {
+
+    # Leave unclassified or code-only names as plain text
+    if (grepl("^unclassified", i) || grepl("^[A-Z0-9-]+$", i)) {
+      return(paste0("'", i, "'"))   # <- quote the whole label
+    }
+
+    parts <- strsplit(i, " ", fixed = TRUE)[[1]]
+
+    if (length(parts) == 1) {
+      paste0("italic('", parts[1], "')")
+    } else {
+      paste0(
+        "italic('", parts[1], "')~'",
+        paste(parts[-1], collapse = " "),
+        "'"
+      )
+    }
+  })
+}
+```
+
+```{r fig.height=5, fig.width=8, fig.align="center"}
+jpeg("./Baceria/Figures/Taxcom_Phylum_Bac_0.05.jpeg", units="in", width = 7.5, height = 6, res = 600 )
+
+# Create the combined plot
+plot_Fun_Phylum <- ggplot(
+  data_glom_combined,
+  aes(x = Incubation, y = Abundance, fill = Phylum)
+) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_x_discrete(labels = c("0.05H", "1H", "24H", "48H", "96H")) +
+  scale_fill_manual(values = cbbPalette) +
+                    #labels = function(x) parse(text = genus_labels(x))) 
+                    
+  facet_wrap(
+    ~Group,
+    labeller = labeller(Group = c(
+      LAC = "Light cyanobacterial crust",
+      CLC = "Cyanolichen crust"
+    ))
+  ) +
+  ggtitle("Bacterial Taxonomic Composition") +
+  theme_bw() +
+  theme_pubr(border = TRUE) +
+  theme(
+    text = element_text(family = main_font),
+    plot.title = element_text(size = size_title, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = size_axis),
+    axis.text.x = element_text(size = size_label, color = "black", angle = 45, hjust = 1),
+    legend.title = element_text(size = size_axis, face = "bold"),
+    legend.text = element_text(size = size_label),
+    strip.text = element_text(size = 13, face = "bold"),
+    panel.grid = element_blank()
+  )
+
+# Display the plot
+print(plot_Fun_Phylum + theme(legend.position="right") + guides(fill=guide_legend(ncol= 1)))
+```
+```{r}
+ggsave("D:/Biocrust_Reawakening/iscience/Figures/FigureS_TaxCom_Phylum_Bac.png", 
+       plot = last_plot(), 
+       device = "png", 
+       width = 180,    # 180mm is standard full-page width
+       height = 120, 
+       units = "mm", 
+       dpi = 300)
+```
+
+```{r}
+ggsave("D:/Biocrust_Reawakening/iscience/Figures/Figure3A_TaxCom_Genus_Bac.pdf", 
+       plot = last_plot(), 
+       device = "pdf", 
+       width = 250,    # 180mm is standard full-page width
+       height = 150, 
+       units = "mm", 
+       dpi = 300)
+```
+
+### Beta diversity with NMDS plot analysis
+
+```{r}
+sample_data(physeq.LAC)$Incubation = factor(sample_data(physeq.LAC)$Incubation, levels = c("0.05", "1", "24", "48", "96"))
+
+sample_data(physeq.CLC)$Incubation = factor(sample_data(physeq.CLC)$Incubation, levels = c("0.05", "1", "24", "48", "96"))
+```
+
+```{r}
+physeq_ord <- ordinate(physeq.CLC,method = "NMDS",distance =  "wunifrac")
+```
+
+```{r}
+ps.dist.all = phyloseq::distance(physeq.CLC, "wunifrac")
+```
+
+```{r}
+adonis2(ps.dist.all ~Incubation, as(sample_data(physeq.CLC),"data.frame"))
+```
+
+```{r}
+jpeg("./Baceria/Figures/Bac_Beta_CLC.jpeg", units="in", width = 6.5, height = 4.5, res = 600 )
+
+pslayer = plot_ordination(physeq.CLC, physeq_ord, type = "samples", color = "Incubation") + 
+  ggtitle("Bacterial Beta Diversity of Cyanolichen crust") + 
+  annotate( "text",
+  x = 0.001, y = 0.02, label = "PERMANOVA*','~~italic(p)==0.001*','~~R^2==0.418", parse = TRUE) +
+  geom_point(size=4) + 
+  scale_colour_manual(values =  c("#F8766D" , "#A3A500" , "#00BF7D",  "#00B0F6", "#E76BF3"),
+                      labels = c("0.05H", "1H", "24H", "48H", "96H")) + 
+  theme_pubr(legend = "right", border = TRUE) +
+  theme(
+    text = element_text(family = main_font),
+    plot.title = element_text(size = size_title, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = size_axis),
+    axis.text.x = element_text(size = size_label, hjust = 1),
+    legend.title = element_text(size = size_axis, face = "bold"),
+    legend.text = element_text(size = size_label),
+    strip.text = element_text(size = 13, face = "bold"),
+    panel.grid = element_blank()
+  ) + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+pslayer
+```
+--------------------------------------------------------------------------------------------------------------------------------
+# Alpha Diversity
+
+```{r}
+sample_data(physeq.LAC)$Incubation = factor(sample_data(physeq.LAC)$Incubation, levels = c("0.05", "1", "24", "48", "96"))
+
+sample_data(physeq.CLC)$Incubation = factor(sample_data(physeq.CLC)$Incubation, levels = c("0.05", "1", "24", "48", "96"))
+```
+
+```{r}
+alpha.diversity = estimate_richness(physeq.CLC, measures = c("Shannon"))
+data.anova = cbind(sample_data(physeq.CLC), alpha.diversity)
+#leveneTest(Observed ~ Incubation, data = data.anova)
+physeq.anova = aov(Shannon ~ Incubation, data.anova)
+summary(physeq.anova)
+```
+
+```{r}
+tukey.ps = TukeyHSD(x=physeq.anova, 'Incubation', conf.level = 0.95)
+
+generate_label_df <- function(tukey.ps, variable){
+ 
+     # Extract labels and factor levels from Tukey post-hoc 
+     Tukey.levels <- tukey.ps[[variable]][,4]
+     Tukey.labels <- data.frame(multcompLetters(Tukey.levels)['Letters'])
+     
+     #I need to put the labels in the same order as in the boxplot :
+     Tukey.labels$treatment=rownames(Tukey.labels)
+     Tukey.labels=Tukey.labels[order(Tukey.labels$treatment) , ]
+     return(Tukey.labels)
+     }
+
+LABELS=generate_label_df(tukey.ps, 'Incubation')
+names(LABELS) = c('Letters','Incubation')
+```
+
+```{r}
+LABELS
+```
+
+```{r}
+ylabel <- data.frame("ylabel" = c(6.0, 6.0, 6.0, 6.0, 6.0)) #LAC surface
+LABELS$ylabel<-ylabel$ylabel
+```
+
+```{r}
+jpeg("./Baceria/Figures/Bac_Alpha_CLC_Shannon.jpeg", units="in", width = 5.5, height = 4.5, res = 600 )
+
+#pdf("D:/Biocrust_Reawakening/Github/Fungi(ITS)/Figures/BAC_Alpha_CLC_Shannon.pdf",width = 8.5, height = 5.5)
+
+custom_palette <- c("0.05" = "#F8766D", "1" = "#A3A500", "24" = "#00BF7D", "48" = "#00B0F6", "96" = "#E76BF3")
+
+physeq.plot.richness.incubation <- plot_richness(physeq.CLC, x = "Incubation", color = "Incubation", measures = c("Shannon")) + 
+  geom_boxplot(aes(fill = Incubation), color = "black", lwd = 0.7) + 
+  ggtitle("Bacterial Alpha Diversity of Cyanolichen crust") + 
+  annotate("text", x = 3, y = 6.5, label = "ANOVA, p = 0.003") +
+  scale_x_discrete(labels = c("0.05H", "1H", "24H", "48H", "96H")) +
+  theme_pubr(border = TRUE, legend = "none") + 
+  
+  theme(
+    text = element_text(family = main_font),
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    strip.text = element_text(size = 14, face = "bold"),  # Shannon
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  ) +
+  scale_colour_manual(values = custom_palette) +
+  scale_fill_manual(values = custom_palette) +
+  geom_text(data = LABELS, aes(x = Incubation, y = ylabel, label = Letters))
+
+physeq.plot.richness.incubation
+#dev.off()
+```
+
+
+#Alpha diversity of Phylum
+```{r}
+physeq.cb = subset_taxa(physeq.LAC, Phylum == "Cyanobacteria")
+physeq.cb
+```
+
+```{r}
+sample_data(physeq.cb)$Incubation = factor(sample_data(physeq.cb)$Incubation, levels = c("0.05", "1", "24", "48", "96"))
+```
+
+```{r}
+alpha.diversity = estimate_richness(physeq.cb, measures = c("Observed"))
+data.anova = cbind(sample_data(physeq.cb), alpha.diversity)
+#leveneTest(Observed ~ Incubation, data = data.anova)
+physeq.anova = aov(Observed ~ Incubation, data.anova)
+summary(physeq.anova)
+```
+
+```{r}
+tukey.ps = TukeyHSD(x=physeq.anova, 'Incubation', conf.level = 0.95)
+
+generate_label_df <- function(tukey.ps, variable){
+ 
+     # Extract labels and factor levels from Tukey post-hoc 
+     Tukey.levels <- tukey.ps[[variable]][,4]
+     Tukey.labels <- data.frame(multcompLetters(Tukey.levels)['Letters'])
+     
+     #I need to put the labels in the same order as in the boxplot :
+     Tukey.labels$treatment=rownames(Tukey.labels)
+     Tukey.labels=Tukey.labels[order(Tukey.labels$treatment) , ]
+     return(Tukey.labels)
+     }
+
+LABELS=generate_label_df(tukey.ps, 'Incubation')
+names(LABELS) = c('Letters','Incubation')
+```
+
+```{r}
+LABELS
+```
+
+```{r}
+ylabel <- data.frame("ylabel" = c(1800, 1800, 1800, 1600, 1600)) #LAC surface
+LABELS$ylabel<-ylabel$ylabel
+```
+
+```{r}
+tiff("D:/Biocrust_Reawakening/New_data/Bacteria/BAC_Alpha_LAC_Observed_Cyanobacteria.tiff", units="in", width = 4.5, height = 6, res = 600 )
+
+#pdf("D:/Biocrust_Reawakening/Github/Fungi(ITS)/Figures/BAC_Alpha_CLC_Shannon.pdf",width = 8.5, height = 5.5)
+
+physeq.plot.richness.incubation = plot_richness(physeq.cb, x="Incubation", color=("Incubation"), measures=c("Observed")) + 
+  geom_boxplot(aes(fill = Incubation), color = "black", lwd = 0.7) + 
+  ggtitle("Cyanobacteria in LAC crust type") + 
+  #stat_compare_means(method = "t.test", label.y = 300) + 
+  annotate("text", x = 3, y = 2000, label = "ANOVA, p = 0.0455") +
+  theme_pubr(border= TRUE, legend = c("none")) + 
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_colour_hue(l = 58) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  geom_text(data=LABELS, aes(x=LABELS$Incubation, y = LABELS$ylabel , label = LABELS$Letters))
+physeq.plot.richness.incubation
+
+#dev.off()
+```
