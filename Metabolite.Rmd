@@ -1,0 +1,211 @@
+```{r}
+library(tidyverse)
+
+# 1. Load your data (assumes your CSV has 'Samples' as the first column)
+  #df <- read.csv("Data/metabolite_clr.csv", check.names = FALSE)
+  df <- read.csv("Data/Metabolite.csv", check.names = FALSE)
+
+# Example structure using your headers:
+# Columns: Samples, Water3M, Water1H, ..., LAC3M1..5, ..., CLC96H1..5
+```
+
+
+```{r}
+# 2. Reshape to long format
+df_long <- df %>%
+  pivot_longer(
+    cols = -Samples,
+    names_to = "Sample_ID",
+    values_to = "Peak_Area"
+  ) %>%
+  # Parse group, time point, and replicate from sample name
+  mutate(
+    Group = case_when(
+      str_starts(Sample_ID, "Water") ~ "Water",
+      str_starts(Sample_ID, "LAC")   ~ "LAC",
+      str_starts(Sample_ID, "CLC")   ~ "CLC"
+    ),
+    # Extract time points: 3M, 1H, 24H, 48H, 96H
+    TimePoint = str_extract(Sample_ID, "(3M|1H|24H|48H|96H)")
+  )
+
+# 3. Extract the Water background baseline (n = 1 per time point)
+water_baseline <- df_long %>%
+  filter(Group == "Water") %>%
+  select(Samples, TimePoint, Water_Area = Peak_Area)
+
+# 4. Calculate Fold Change at each matching time point
+fc_by_timepoint <- df_long %>%
+  filter(Group %in% c("LAC", "CLC")) %>%
+  group_by(Samples, Group, TimePoint) %>%
+  summarise(
+    Mean_Sample_Area = mean(Peak_Area, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  left_join(water_baseline, by = c("Samples", "TimePoint")) %>%
+  mutate(
+    Water_Area_Adj = if_else(Water_Area == 0 | is.na(Water_Area), 1, Water_Area),
+    Fold_Change = Mean_Sample_Area / Water_Area_Adj
+  )
+
+# 5. Filter: Keep if Fold_Change >= 3 in AT LEAST ONE time point (any(Fold_Change >= 3))
+metabolite_status <- fc_by_timepoint %>%
+  group_by(Samples, Group) %>%
+  summarise(
+    # TRUE if at least one time point has Fold_Change >= 3
+    Keep = any(Fold_Change >= 2.5),
+    Max_Fold_Change = max(Fold_Change, na.rm = TRUE),
+    Best_TimePoint = TimePoint[which.max(Fold_Change)],
+    .groups = "drop"
+  )
+
+# View metabolites that PASS the filter (Kept)
+passed_metabolites <- metabolite_status %>%
+  filter(Keep == TRUE)
+
+# View metabolites that FAIL the filter (Excluded as background)
+excluded_metabolites <- metabolite_status %>%
+  filter(Keep == FALSE)
+
+print(excluded_metabolites)
+```
+```{r}
+# 1. Pivot sample means to wide format
+sample_means_wide <- fc_by_timepoint %>%
+  select(Samples, Group, TimePoint, Mean_Sample_Area) %>%
+  pivot_wider(
+    names_from = TimePoint,
+    values_from = Mean_Sample_Area,
+    names_prefix = "Sample_Mean_"
+  )
+
+# 2. Pivot water blank baseline to wide format
+water_wide <- water_baseline %>%
+  pivot_wider(
+    names_from = TimePoint,
+    values_from = Water_Area,
+    names_prefix = "Water_Area_"
+  )
+
+# 3. Pivot Fold Change (SBR) to wide format
+sbr_wide <- fc_by_timepoint %>%
+  select(Samples, Group, TimePoint, Fold_Change) %>%
+  mutate(Fold_Change = round(Fold_Change, 2)) %>%
+  pivot_wider(
+    names_from = TimePoint,
+    values_from = Fold_Change,
+    names_prefix = "SBR_"
+  )
+
+# 4. Join components together with final filter decisions
+supplementary_table <- sample_means_wide %>%
+  left_join(water_wide, by = "Samples") %>%
+  left_join(sbr_wide, by = c("Samples", "Group")) %>%
+  left_join(
+    metabolite_status %>%
+      mutate(
+        Max_Fold_Change = round(Max_Fold_Change, 2),
+        Filter_Status = if_else(Keep, "RETAINED", "EXCLUDED"),
+        Action = if_else(Keep, "Retained for downstream CLR and network analysis", "Excluded as solvent/background artifact")
+      ) %>%
+      select(Samples, Group, Max_Fold_Change, Best_TimePoint, Filter_Status, Action),
+    by = c("Samples", "Group")
+  ) %>%
+  # Reorder columns logically: 3M -> 1H -> 24H -> 48H -> 96H
+  select(
+    Metabolite = Samples,
+    Crust_Type = Group,
+    # Biological Sample Means (n=5)
+    `Sample Mean (3M)`  = Sample_Mean_3M,
+    `Sample Mean (1H)`  = Sample_Mean_1H,
+    `Sample Mean (24H)` = Sample_Mean_24H,
+    `Sample Mean (48H)` = Sample_Mean_48H,
+    `Sample Mean (96H)` = Sample_Mean_96H,
+    # Water Blank Baseline (n=1)
+    `Water Area (3M)`   = Water_Area_3M,
+    `Water Area (1H)`   = Water_Area_1H,
+    `Water Area (24H)`  = Water_Area_24H,
+    `Water Area (48H)`  = Water_Area_48H,
+    `Water Area (96H)`  = Water_Area_96H,
+    # Signal-to-Blank Ratios
+    `SBR (3M)`          = SBR_3M,
+    `SBR (1H)`          = SBR_1H,
+    `SBR (24H)`         = SBR_24H,
+    `SBR (48H)`         = SBR_48H,
+    `SBR (96H)`         = SBR_96H,
+    # Evaluation Metrics
+    `Max SBR`           = Max_Fold_Change,
+    `Best Time Point`   = Best_TimePoint,
+    `Filter Status`     = Filter_Status,
+    `Action / Notes`    = Action
+  ) %>%
+  arrange(Metabolite, Crust_Type)
+```
+
+
+```{r}
+# 7. Export table for Data S1 / Supplementary Information
+writexl::write_xlsx(supplementary_table, "Data_S1_Fold.xlsx")
+```
+
+```{r}
+library(tidyverse)
+
+# 1. Reshape data
+df_long <- df %>%
+  pivot_longer(
+    cols = -Samples,
+    names_to = "Sample_ID",
+    values_to = "Peak_Area"
+  ) %>%
+  mutate(
+    Group = case_when(
+      str_starts(Sample_ID, "Water") ~ "Water",
+      str_starts(Sample_ID, "LAC")   ~ "LAC",
+      str_starts(Sample_ID, "CLC")   ~ "CLC"
+    ),
+    TimePoint = str_extract(Sample_ID, "(3M|1H|24H|48H|96H)")
+  )
+
+# 2. Extract water control baseline (mu0)
+water_baseline <- df_long %>%
+  filter(Group == "Water") %>%
+  select(Samples, TimePoint, Water_Area = Peak_Area)
+
+# 3. Perform One-Sample t-Test at each time point for LAC and CLC
+ttest_results <- df_long %>%
+  filter(Group %in% c("LAC", "CLC")) %>%
+  left_join(water_baseline, by = c("Samples", "TimePoint")) %>%
+  group_by(Samples, Group, TimePoint) %>%
+  summarise(
+    Mean_Sample = mean(Peak_Area, na.rm = TRUE),
+    SD_Sample   = sd(Peak_Area, na.rm = TRUE),
+    Water_Val   = first(Water_Area),
+    Fold_Change = Mean_Sample / if_else(Water_Val == 0 | is.na(Water_Val), 1, Water_Val),
+    # One-sample t-test: H1 is Mean_Sample > Water_Val
+    p_value = tryCatch(
+      t.test(Peak_Area, mu = first(Water_Val), alternative = "greater")$p.value,
+      error = function(e) NA_real_
+    ),
+    .groups = "drop"
+  ) %>%
+  # Multiple-testing adjustment across features and time points
+  mutate(p_adj = p.adjust(p_value, method = "BH"))
+
+# 4. Filter: Retain metabolite if p_adj < 0.05 (and Mean > Water) in AT LEAST ONE time point
+metabolite_selection <- ttest_results %>%
+  group_by(Samples, Group) %>%
+  summarise(
+    # Significant enrichment in at least one time point
+    Pass_tTest = any(p_adj < 0.05 & Mean_Sample > Water_Val, na.rm = TRUE),
+    Min_p_adj  = min(p_adj, na.rm = TRUE),
+    Max_FC     = max(Fold_Change, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Retained features
+retained_metabolites <- metabolite_selection %>% filter(Pass_tTest == TRUE)
+# Excluded background artifacts
+excluded_metabolites <- metabolite_selection %>% filter(Pass_tTest == FALSE)
+```
+
